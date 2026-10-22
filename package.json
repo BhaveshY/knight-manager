@@ -1,0 +1,30 @@
+{
+  "name": "knight-manager",
+  "version": "2.0.0",
+  "description": "A durable local Codex workflow with build and end-to-end gates",
+  "type": "module",
+  "bin": { "knight": "dist/cli.js" },
+  "files": ["dist", "README.md", "SECURITY.md", "LICENSE", "docs/verification.md"],
+  "engines": { "node": ">=24.0.0" },
+  "os": ["linux"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/BhaveshY/knight-manager.git" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:clean": "npm ci --ignore-scripts && npm run build",
+    "test:e2e": "node --test --test-concurrency=1 test/e2e/*.test.mjs",
+    "test:live": "node --test test/live/codex.test.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-durable": "1.4.0",
+    "proper-lockfile": "4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "@types/proper-lockfile": "4.1.4",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.knight/
+.env
+.env.*
+!.env.example
+.codex/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.tgz
+coverage/
+test-results/

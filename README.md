@@ -1,160 +1,147 @@
 # Knight Manager
 
-An autonomous development lifecycle orchestrator for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It takes a vague idea and delivers a verified implementation by coordinating 9 specialized sub-agents through a closed-loop state machine with backtracking, diagnostics, and compaction resilience.
+A local development runner built on **Pi Durable** and the **Codex CLI**.
+Give it a goal in a trusted Git repository. Knight creates a separate worktree,
+asks Codex to implement the change using your ChatGPT subscription, and runs
+the project's build and end-to-end checks. Failed checks feed a bounded repair
+loop. Every step has a persisted receipt.
 
-## How it works
-
-The Manager runs an adaptive pipeline that detects whether you're starting from scratch (greenfield) or modifying an existing project (brownfield), then routes through the appropriate phases:
-
+```text
+clean Git commit → isolated worktree → Codex → build → E2E → ready for review
+                                         ↑       failure ↲
+                                         └──── repair (bounded)
 ```
-DETECT -> GRILL -> [SCAFFOLD | EXPLORE] -> ARCHITECT -> BUILD -> REVIEW -> DESLOPIFY -> TEST -> VERIFY -> COMPLETE
-```
 
-- **Greenfield** (no existing project files): GRILL -> SCAFFOLD -> ARCHITECT -> ...
-- **Brownfield** (existing repo): GRILL -> EXPLORE -> ARCHITECT -> ...
+This replaces the old Claude prompt pack with an executable workflow.
 
-Each phase has a gate condition. If a gate fails, the Manager consults a backtrack matrix to determine which earlier phase to re-run, attaching a diagnostic bundle so the target agent knows exactly what went wrong.
+## Install
 
-### Pipeline phases
-
-| Phase | What happens |
-|-------|-------------|
-| **DETECT** | Manager reads the working directory to classify greenfield vs brownfield |
-| **GRILL** | Interrogates the user to extract complete requirements from the vague request |
-| **SCAFFOLD** | (Greenfield) Bootstraps the project: package manager, deps, configs |
-| **EXPLORE** | (Brownfield) Two parallel agents analyze architecture and relevant code |
-| **ARCHITECT** | Creates an implementation plan backed by research citations and shared contracts |
-| **BUILD** | Engineers implement tasks sequentially, reading contracts and shared notes |
-| **REVIEW** | Two parallel reviewers check for bugs/security and plan alignment |
-| **DESLOPIFY** | Single cleanup pass: simplify complexity, improve naming, extract reuse |
-| **TEST** | Creates and runs tests, checks env vars, reports pass rate and coverage |
-| **VERIFY** | Independent final gate: build, lint, types, tests, requirements checklist |
-
-## Agents
-
-| Agent | Role | Model |
-|-------|------|-------|
-| **Knight Griller** | Requirements interrogator | opus |
-| **Knight Scaffold** | Project bootstrapper (greenfield) | opus |
-| **Knight Explorer** | Codebase analyst (brownfield, 2x parallel) | sonnet |
-| **Knight Architect** | Planner, researcher, contract definer | opus |
-| **Knight Engineer** | Implementation specialist (1 per task) | opus |
-| **Knight Reviewer** | Code review specialist (2x parallel) | sonnet |
-| **Knight Deslopifier** | Code cleanup specialist | opus |
-| **Knight Tester** | Test creator and runner | opus |
-| **Knight Verifier** | Final independent gate checker | opus |
-
-All agents are dispatched as `general-purpose` subagents via the Claude Code Agent tool. Each reads its instructions from `agents/knight-*.md` and writes structured output to the session directory.
-
-## Key features
-
-- **Adaptive pipeline** -- greenfield and brownfield projects take different paths through the same state machine
-- **Backtrack matrix** -- a deterministic table mapping every failure type at every phase to the correct earlier phase, with cascade rules that re-run all downstream phases
-- **Compaction resilience** -- pre-compact and post-compact hooks snapshot the full pipeline state to `recovery-state.md` so the Manager can resume after context compaction without losing progress
-- **Shared contracts** -- the Architect defines TypeScript/Python interfaces in `contracts/` that all Engineers and Reviewers reference, preventing integration drift
-- **Shared notes** -- every agent appends to `shared-notes.md`, giving later agents context about what earlier agents did
-- **Diagnostic bundles** -- on backtrack, the Manager writes a JSON diagnostic with the failure type, evidence, file snippets, and previous attempt count
-- **Safety limits** -- max 3 retries per target, max 10 total backtracks per session; after limits hit, escalates to user with options
-- **Confidence scoring** -- each phase reports a numeric confidence score (griller: requirement count, architect: source quality, tester: pass rate, etc.)
-- **Parallel agents** -- Explorer and Reviewer phases launch 2 agents concurrently for throughput
-
-## Installation
-
-1. Copy or clone the repo into your Claude Code skills directory:
+Requires **Linux, Node 24+, Git, and Codex CLI 0.163.0+**. macOS and Windows are
+not supported by this release. Install Codex using its [official instructions](https://github.com/openai/codex),
+then sign in locally with `codex login` using ChatGPT. Knight requires no API key.
+Subscription entitlements, usage limits, and network access still apply.
 
 ```sh
-git clone https://github.com/BhaveshY/knight-manager.git ~/.claude/skills/knight-manager
+git clone https://github.com/BhaveshY/knight-manager.git
+cd knight-manager
+npm ci --ignore-scripts
+npm run build
+node dist/cli.js --help
 ```
 
-2. Add the compaction hooks to `~/.claude/settings.json`:
+Use the absolute path to `dist/cli.js` from another project, or run `npm link`
+to make `knight` available on your PATH. The package is not published to npm.
+
+## Run a project
+
+```sh
+cd /path/to/your/project
+knight init
+# Review knight.json and set commands that build and test this project.
+git add knight.json .gitignore
+git commit -m "Configure Knight build and E2E gates"
+knight doctor
+knight run "Fix the checkout flow and verify it end to end" --id checkout-fix
+knight status checkout-fix
+```
+
+Start from a clean checkout with `knight.json` committed. Uncommitted source
+files, ignored files, `.env`, and existing `node_modules` are not copied into
+the new worktree. Put required dependency setup in your build command, or
+prepare an offline build environment before running. Build and E2E commands
+run on the host; Codex's shell network is disabled.
+
+`doctor` checks the installed CLI and its reported sign-in method. Only an
+actual coding run proves that the saved sign-in can authenticate to ChatGPT.
+
+The run prints the worktree and log paths. Inspect all changed and untracked
+files there, including tests. Keep or integrate the changes with your normal
+Git workflow. Knight never commits, pushes, or merges on your behalf.
+
+## Configuration
 
 ```json
 {
-  "hooks": {
-    "PreCompact": [
-      {
-        "type": "command",
-        "command": "bash ~/.claude/skills/knight-manager/hooks/pre-compact.sh"
-      }
-    ],
-    "PostCompact": [
-      {
-        "type": "command",
-        "command": "bash ~/.claude/skills/knight-manager/hooks/post-compact.sh"
-      }
-    ]
-  }
+  "version": 1,
+  "build": ["npm", "run", "build"],
+  "e2e": ["npm", "run", "test:e2e"],
+  "maxAttempts": 3,
+  "timeoutMs": 600000
 }
 ```
 
-These hooks let the Manager survive context compaction by writing and reading `recovery-state.md`.
+Commands are argument arrays passed directly to the executable. Shell syntax,
+variable expansion, and `&&` are not interpreted. Put multi-command setup in
+a reviewed project script. Both gates are required. Unknown fields and malformed
+commands are rejected. `maxAttempts` is 1–5 (including the initial coding
+attempt); `timeoutMs` is 100–3,600,000 per command. Each command's combined output
+is capped at 2 MiB; overflow fails the step. Codex failures stop immediately;
+build/E2E failures trigger repair until the attempt budget is exhausted.
 
-## Usage
+The admitted goal, base commit, and configuration are immutable for a run ID.
+Repeating the same request returns its saved result. A different request with
+that ID is rejected. Start a new ID after changing the goal or configuration.
 
-```
-/knight "build me a real-time chat app with WebSocket support"
-```
+## Recover work
 
-The Manager will:
-1. Detect project type (greenfield/brownfield)
-2. Grill you for requirements (3-5 questions)
-3. Scaffold or explore the codebase
-4. Create a researched implementation plan and ask for your approval
-5. Build, review, clean up, test, and verify
-6. Present a session summary when done
-
-You can also resume an interrupted session -- the Manager checks `~/.claude/knight/sessions/` on startup and picks up where it left off.
-
-## Session files
-
-Each run creates a session directory at `~/.claude/knight/sessions/knight-YYYYMMDD-HHmmss/` containing:
-
-| File | Purpose |
-|------|---------|
-| `loop-state.json` | Pipeline state: current phase, attempt counts, backtrack history, build tasks |
-| `shared-notes.md` | Running log appended by every agent |
-| `requirements.md` | Output of the Griller phase |
-| `exploration.md` | (Brownfield) Merged output of the two Explorer agents |
-| `env-checklist.md` | (Greenfield) Environment variables and setup checklist |
-| `plan.md` | Architect's implementation plan with research citations |
-| `contracts/` | Shared type definitions and interfaces |
-| `review-issues.json` | Merged review findings from both Reviewer agents |
-| `deslopify-result.json` | Cleanup pass results |
-| `test-result.json` | Test pass rate, coverage, failures |
-| `verify-result.json` | Final gate results: build, lint, types, tests, requirements |
-| `recovery-state.md` | Compaction recovery snapshot (written by pre-compact hook) |
-| `diagnostics/` | Backtrack diagnostic bundles (`backtrack-NNN.json`) |
-| `session-summary.md` | Final summary written on completion |
-
-## Project structure
-
-```
-knight-manager/
-  SKILL.md                         # Main skill prompt (the Manager)
-  REFERENCE.md                     # Phase protocols, backtrack matrix, schemas
-  agents/
-    knight-architect.md            # Planner and contract definer
-    knight-deslopifier.md          # Code cleanup specialist
-    knight-engineer.md             # Implementation specialist
-    knight-explorer.md             # Codebase analyst (brownfield)
-    knight-griller.md              # Requirements interrogator
-    knight-reviewer.md             # Code review specialist
-    knight-scaffold.md             # Project bootstrapper (greenfield)
-    knight-tester.md               # Test creator and runner
-    knight-verifier.md             # Final gate checker
-  hooks/
-    pre-compact.sh                 # Snapshots state before compaction
-    post-compact.sh                # Triggers recovery after compaction
-  scripts/
-    tmux-render.sh                 # Status rendering for tmux
-    tmux-setup.sh                  # tmux session setup
-    tmux-teardown.sh               # tmux session cleanup
-  templates/
-    plan.md                        # Plan output template
-    requirements.md                # Requirements output template
-    session-summary.md             # Session summary template
+```sh
+knight status checkout-fix --json
+knight resume checkout-fix
+# If a step was interrupted, inspect its worktree and logs first:
+knight resume checkout-fix --retry-interrupted
 ```
 
-## License
+Pi Durable 1.4.0 owns the SQLite-backed task and document checkpoints. Finished
+steps are not replayed. An interrupted external command has an uncertain
+outcome, so recovery blocks it until you explicitly request a retry. A retry
+uses the existing worktree and runs that step again. There is no exactly-once
+guarantee for external side effects.
 
-MIT
+Ctrl-C stops the active command and retains the run. After a hard crash, wait
+five seconds for the writer lock to expire. To abandon a stopped run:
+
+```sh
+knight cancel checkout-fix
+```
+
+Worktrees and logs are retained even after failure or cancellation. To remove
+one after reviewing or saving its changes, use `git worktree remove` on the
+printed workspace path, then delete that run's state directory. Knight does
+not automatically discard work.
+
+Exit codes: `0` for completed/cancelled runs and successful read commands, `1`
+for failed runs or invalid commands, `2` for recovery awaiting explicit replay,
+and `130` for an interrupted foreground run. `status` reports the latest exported
+committed snapshot; `resume` refreshes it from SQLite after a crash.
+
+## Verify this project
+
+```sh
+npm run build
+npm run test:e2e
+# Uses your real Codex sign-in and subscription:
+npm run test:live
+```
+
+All tests exercise the public CLI through real OS processes, temporary Git
+repositories, worktrees, and SQLite files. There are no unit tests. The offline
+E2E suite substitutes a deterministic **Codex executable fixture** to reproduce
+failures, timeouts, and crashes. It does not prove model behavior or subscription
+access. The separate live E2E asks the real Codex CLI to fix a calculator, runs
+the build and executable checks, and verifies that the starting checkout and
+test assertions remain unchanged. A failed live test is a failure, never a skip
+or a substitute response. See [verification evidence](docs/verification.md).
+
+## Code map
+
+| File | Responsibility |
+| --- | --- |
+| `src/cli.ts` | CLI, preflight, immutable admission, writer lock |
+| `src/runtime.ts` | Pi Durable workflow, Codex invocation, repair and recovery |
+| `src/state.ts` | Typed durable state, private directories, status export |
+| `src/process.ts`, `src/worker.ts` | Argument-based execution and process supervision |
+| `src/config.ts` | Strict build/E2E configuration |
+| `test/e2e/`, `test/live/` | CLI E2E coverage and real subscription check |
+
+Read [SECURITY.md](SECURITY.md) for the execution and credential boundaries.
+MIT licensed.

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "build": ["npm", "run", "build:clean"],
+  "e2e": ["npm", "run", "test:e2e"],
+  "maxAttempts": 3,
+  "timeoutMs": 600000
+}
